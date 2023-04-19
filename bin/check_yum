@@ -1,0 +1,146 @@
+#!/bin/bash
+
+readonly __VERSION="1.0.0-20230419"
+readonly __NAME="check_yum"
+
+readonly DNF="/usr/bin/dnf"
+readonly YUM="/usr/bin/yum"
+
+readonly OK=0
+# readonly WARNING=1
+readonly CRITICAL=2
+readonly UNKNOWN=3
+
+function dnf_or_yum() {
+    if [ -x "${DNF}" ]; then
+        echo "${DNF}"
+    elif [ -x "${YUM}" ]; then
+        echo "${YUM}"
+    fi
+    echo ""
+}
+
+function version() {
+    cat << EoT 
+${__NAME} version ${__VERSION}
+Copyright (C) 2023 by Andreas Maus <maus@ypbind.de>
+This program comes with ABSOLUTELY NO WARRANTY.
+    
+${__NAME}} is distributed under the Terms of the GNU General
+Public License Version 3. (http://www.gnu.org/copyleft/gpl.html)
+EoT
+}
+
+function usage() {
+    version
+    cat << EoT
+Usage: ${__NAME} [-h|--help]
+EoT
+}
+
+function clean_on_exit() {
+    test -n "${STDERR}" && /bin/rm -f "${STDERR}"
+    test -n "${STDOUT}" && /bin/rm -f "${STDOUT}"
+}
+
+function check_for_updates() {
+    STDERR="$(mktemp)"
+    readonly STDERR
+    STDOUT="$(mktemp)"
+    readonly STDOUT
+
+    "${CMD}" --security check-update 2>"${STDERR}" >"${STDOUT}"
+    rc=$?
+    if [ ${rc} -ne 0 ]  && [ ${rc} -ne 100 ]; then
+        echo "${CMD} --security check-update failed: $(xargs < "${STDERR}")"
+        clean_on_exit
+        exit ${UNKNOWN}
+    fi
+
+    summary="no"
+    security=0
+    non_security=0
+
+    # Check for summary line
+    #
+    # Note:
+    #  - DNF on RHEL9 prints the summary to stderr
+    #  - DNF on RHEL8 prints no summary at all but prints all packages to stdout
+    #  - YUM on RHEL7 prints the summary to stdout
+    if grep -Eq '^No security updates needed, but ([0-9]+) updates available' "${STDOUT}" "${STDERR}"; then
+        non_security=$(sed --regexp-extended --quiet --expression='s/No security updates needed, but ([0-9]+) updates available/\1/p' "${STDOUT}" "${STDERR}")
+        summary="yes"
+    elif grep -Eq '^No packages needed for security; ([0-9]+) packages available' "${STDOUT}" "${STDERR}"; then
+        non_security=$(sed --regexp-extended --quiet --expression='s/^No packages needed for security; ([0-9]+) packages available/\1/p' "${STDOUT}" "${STDERR}")
+        summary="yes"
+    elif grep -Eq '^([0-9]+) package\(s\) needed for security, out of ([0-9]+) available' "${STDOUT}" "${STDERR}"; then
+        s_and_ns=$(sed --regexp-extended --quiet --expression='s/^([0-9]+) package\(s\) needed for security, out of ([0-9]+) available/\1,\2/p' "${STDOUT}" "${STDERR}")
+        security=$(echo "${s_and_ns}" | cut -d ',' -f 1)
+        non_security=$(echo "${s_and_ns}" | cut -d ',' -f 2)
+        summary="yes"
+    fi
+
+    if [ "${summary}" != "yes" ]; then
+        # Output format looks like:
+        #
+        # Updating Subscription Management repositories.
+        # Last metadata expiration check: 3:27:18 ago on Wed 19 Apr 2023 03:09:16 PM CEST.
+        # curl.x86_64   7.61.1-25.el8_7.3   BaseOS
+        # [...]
+        # Obsoleting Packages
+        # grub2-tools.x86_64        1:2.02-142.el8_7.3.rocky.0.2    BaseOS
+        #     grub2-tools.x86_64    1:2.02-142.el8_7.1.rocky.0.2    @BaseOS
+        # [...]
+        #
+        security=$(grep -v '^Last metadata expiration check:' "${STDOUT}" | grep -v '^Updating Subscription Management repositories' | grep -v '^Obsoleting Packages' | \
+            grep -v '^ ' | grep -v '^$' | cut -d ' ' -f 1 | sort -u | wc -l)
+
+        # Get non-security updates from dnf/yum updateinfo which looks like:
+        #
+        # Updating Subscription Management repositories.
+        # Last metadata expiration check: 1:25:33 ago on Wed 19 Apr 2023 05:35:06 PM CEST.
+        # Updates Information Summary: available
+        #     1 New Package notice(s)
+        #     6 Security notice(s)
+        #         5 Important Security notice(s)
+        #         1 Moderate Security notice(s)
+        #     9 Bugfix notice(s)
+        if ! "${CMD}" updateinfo 2>"${STDERR}" >"${STDOUT}"; then
+            echo "${CMD} updateinfo failed: $(xargs < "${STDERR}")"
+            clean_on_exit
+            exit ${UNKNOWN}
+        fi
+        sec_n=$(sed --regexp-extended --quiet --expression='s/^\s+([0-9]+) Security notice\(s\)/\1/p' "${STDOUT}")
+        test -n "${sec_n}" && sec_n=0
+
+        nsec_n=$(sed --regexp-extended --quiet --expression='s/\s+([0-9]+) Bugfix notice\(s\)/\1/p' "${STDOUT}")
+        test -n "${nsec_n}" && nsec_n=0
+
+        non_security=$(( nsec_n - sec_n ))
+    fi
+
+    clean_on_exit
+    echo "${security},${non_security}"
+}
+
+function main() {
+    CMD="$(dnf_or_yum)"
+    if [ -z "${CMD}" ]; then
+        echo "Neither ${DNF} nor ${YUM} where found"
+        exit ${UNKNOWN}
+    fi
+
+    update_count="$(check_for_updates)"
+
+    security_count="$(echo "${update_count}" | cut -d ',' -f 1)"
+    non_security_count="$(echo "${update_count}" | cut -d ',' -f 2)"
+
+    echo "${security_count} security updates available, ${non_security_count} non-security updates available"
+    if [ "${security_count}" -gt 0 ]; then
+        exit ${CRITICAL}
+    fi
+
+    exit ${OK}
+}
+
+main
