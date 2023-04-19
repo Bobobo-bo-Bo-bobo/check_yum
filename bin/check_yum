@@ -7,9 +7,17 @@ readonly DNF="/usr/bin/dnf"
 readonly YUM="/usr/bin/yum"
 
 readonly OK=0
-# readonly WARNING=1
+readonly WARNING=1
 readonly CRITICAL=2
 readonly UNKNOWN=3
+
+readonly SHORT_OPTIONS="c:hwCD:E:VW"
+readonly LONG_OPTIONS="config-file=,cacheonly,disable-repo=,enable-repo=,help,version,warn-on-non-security-updates,warn-on-lock"
+
+LOCKED_IS_OK="yes"
+WARN_ON_NON_SECURITY_UPDATES="no"
+
+DNF_YUM_ADDITIONAL_OPTIONS=""
 
 function dnf_or_yum() {
     if [ -x "${DNF}" ]; then
@@ -34,7 +42,34 @@ EoT
 function usage() {
     version
     cat << EoT
-Usage: ${__NAME} [-h|--help]
+
+Usage: ${__NAME} [-C|--cacheonly] [-D <repo>,<repo>,...|--disable-repo=<repo>,<repo>,...] [-E <repo>,<repo>,...|--enable-repo=<repo>,<repo>,...]
+    [-V|--version] [-W|--warn-on-lock] [-c <cfg>|--config-file=<cfg>] [-h|--help] [-w|--warn-on-non-security-updates]
+
+    -C                                  Used cached information, don't update DNF/YUM cache
+    --cacheonly
+
+    -D <repo>,<repo>,...                Comma separated list of repos to disable
+    --disable-repo=<repo>,<repo>,...
+
+    -E <repo>,<repo>,...                Comma separated list of repos to enable
+    --enable-repo=<repo>,<repo>,...
+
+    -V                                  Show version information
+    --version
+
+    -W                                  Warn if database is locked (another dnf/yum process is running)
+    --warn-on-lock                      Default: no, return OK status
+
+    -c <cfg>                            Use non-default configuration file for DNF/YUM
+    --config-file=<cfg>                 Default: /etc/dnf/dnf.conf (DNF) or /etc/yum.conf (YUM)
+
+    -h                                  Show this help text
+    --help
+
+    -w                                  Report warning state if (only) non-security updates are found
+    --warn-on-non-security-updates      Default: Report OK
+
 EoT
 }
 
@@ -49,10 +84,22 @@ function check_for_updates() {
     STDOUT="$(mktemp)"
     readonly STDOUT
 
-    "${CMD}" --security check-update 2>"${STDERR}" >"${STDOUT}"
+    # shellcheck disable=SC2086
+    "${CMD}" --security --color=never ${DNF_YUM_ADDITIONAL_OPTIONS} check-update 2>"${STDERR}" >"${STDOUT}"
     rc=$?
     if [ ${rc} -ne 0 ]  && [ ${rc} -ne 100 ]; then
-        echo "${CMD} --security check-update failed: $(xargs < "${STDERR}")"
+        if [ ${rc} -eq 200 ]; then
+            echo "Another instance of $(basename "$0") is already running"
+            if [ "${LOCKED_IS_OK}" = "yes" ]; then
+                clean_on_exit
+                exit ${OK}
+            else
+                clean_on_exit
+                exit ${WARNING}
+            fi
+        fi
+
+        echo "${CMD} --security --color=never ${DNF_YUM_ADDITIONAL_OPTIONS} check-update failed: $(xargs < "${STDERR}")"
         clean_on_exit
         exit ${UNKNOWN}
     fi
@@ -81,6 +128,25 @@ function check_for_updates() {
     fi
 
     if [ "${summary}" != "yes" ]; then
+
+        # Get non-security updates from dnf/yum updateinfo which looks like:
+        #
+        # Updating Subscription Management repositories.
+        # Last metadata expiration check: 1:25:33 ago on Wed 19 Apr 2023 05:35:06 PM CEST.
+        # Updates Information Summary: available
+        #     1 New Package notice(s)
+        #     6 Security notice(s)
+        #         5 Important Security notice(s)
+        #         1 Moderate Security notice(s)
+        #     9 Bugfix notice(s)
+
+        # shellcheck disable=SC2086
+        if ! "${CMD}" --color=never ${DNF_YUM_ADDITIONAL_OPTIONS} updateinfo 2>"${STDERR}" >"${STDOUT}"; then
+            echo "${CMD} --color=never ${DNF_YUM_ADDITIONAL_OPTIONS} updateinfo failed: $(xargs < "${STDERR}")"
+            clean_on_exit
+            exit ${UNKNOWN}
+        fi
+
         # Output format looks like:
         #
         # Updating Subscription Management repositories.
@@ -95,21 +161,6 @@ function check_for_updates() {
         security=$(grep -v '^Last metadata expiration check:' "${STDOUT}" | grep -v '^Updating Subscription Management repositories' | grep -v '^Obsoleting Packages' | \
             grep -v '^ ' | grep -v '^$' | cut -d ' ' -f 1 | sort -u | wc -l)
 
-        # Get non-security updates from dnf/yum updateinfo which looks like:
-        #
-        # Updating Subscription Management repositories.
-        # Last metadata expiration check: 1:25:33 ago on Wed 19 Apr 2023 05:35:06 PM CEST.
-        # Updates Information Summary: available
-        #     1 New Package notice(s)
-        #     6 Security notice(s)
-        #         5 Important Security notice(s)
-        #         1 Moderate Security notice(s)
-        #     9 Bugfix notice(s)
-        if ! "${CMD}" updateinfo 2>"${STDERR}" >"${STDOUT}"; then
-            echo "${CMD} updateinfo failed: $(xargs < "${STDERR}")"
-            clean_on_exit
-            exit ${UNKNOWN}
-        fi
         sec_n=$(sed --regexp-extended --quiet --expression='s/^\s+([0-9]+) Security notice\(s\)/\1/p' "${STDOUT}")
         test -n "${sec_n}" && sec_n=0
 
@@ -123,7 +174,66 @@ function check_for_updates() {
     echo "${security},${non_security}"
 }
 
+function parse_command_line_options() {
+    OPTS=$(getopt -o "${SHORT_OPTIONS}" --long "${LONG_OPTIONS}" -n "$(basename "$0")" -- "$@")
+    eval set -- "${OPTS}"
+    unset OPTS
+
+    while true; do
+        case "$1" in
+            '-C'|'--cacheonly')
+                DNF_YUM_ADDITIONAL_OPTIONS="${DNF_YUM_ADDITIONAL_OPTIONS} --cacheonly"
+                shift
+                continue
+                ;;
+            '-D'|'--disable-repo')
+                DNF_YUM_ADDITIONAL_OPTIONS="${DNF_YUM_ADDITIONAL_OPTIONS} --disablerepo=$2"
+                shift 2
+                continue
+                ;;
+            '-E'|'--enable-repo')
+                DNF_YUM_ADDITIONAL_OPTIONS="${DNF_YUM_ADDITIONAL_OPTIONS} --enablerepo=$2"
+                shift 2
+                continue
+                ;;
+            '-V'|'--version')
+                version
+                exit ${OK}
+                ;;
+            '-W'|'--warn-on-lock')
+                LOCKED_IS_OK="no"
+                shift
+                continue
+                ;;
+            '-c'|'--config-file')
+                DNF_YUM_ADDITIONAL_OPTIONS="${DNF_YUM_ADDITIONAL_OPTIONS} --config=$2"
+                shift 2
+                continue
+                ;;
+            '-h'|'--help')
+                usage
+                exit ${OK}
+                ;;
+            '-w'|'--warn-on-non-security-updates')
+                WARN_ON_NON_SECURITY_UPDATES="yes"
+                shift
+                continue
+                ;;
+            '--')
+                shift
+                break
+                ;;
+            *)
+                echo "Error: Can't parse command line arguments" >&2
+                exit ${UNKNOWN}
+                ;;
+        esac
+    done
+}
+
 function main() {
+    parse_command_line_options "$@"
+
     CMD="$(dnf_or_yum)"
     if [ -z "${CMD}" ]; then
         echo "Neither ${DNF} nor ${YUM} where found"
@@ -140,7 +250,14 @@ function main() {
         exit ${CRITICAL}
     fi
 
+    if [ "${non_security_count}" -gt 0 ]; then
+        if [ "${WARN_ON_NON_SECURITY_UPDATES}" = "yes" ]; then
+            exit ${WARNING}
+        fi
+        exit ${OK}
+    fi
+
     exit ${OK}
 }
 
-main
+main "$@"
