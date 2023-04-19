@@ -128,6 +128,19 @@ function check_for_updates() {
     fi
 
     if [ "${summary}" != "yes" ]; then
+        # Output format looks like:
+        #
+        # Updating Subscription Management repositories.
+        # Last metadata expiration check: 3:27:18 ago on Wed 19 Apr 2023 03:09:16 PM CEST.
+        # curl.x86_64   7.61.1-25.el8_7.3   BaseOS
+        # [...]
+        # Obsoleting Packages
+        # grub2-tools.x86_64        1:2.02-142.el8_7.3.rocky.0.2    BaseOS
+        #     grub2-tools.x86_64    1:2.02-142.el8_7.1.rocky.0.2    @BaseOS
+        # [...]
+        #
+        security=$(grep -v '^Last metadata expiration check:' "${STDOUT}" | grep -v '^Updating Subscription Management repositories' | grep -v '^Obsoleting Packages' | \
+            grep -v '^ ' | grep -v '^$' | cut -d ' ' -f 1 | sort -u | wc -l)
 
         # Get non-security updates from dnf/yum updateinfo which looks like:
         #
@@ -146,20 +159,6 @@ function check_for_updates() {
             clean_on_exit
             exit ${UNKNOWN}
         fi
-
-        # Output format looks like:
-        #
-        # Updating Subscription Management repositories.
-        # Last metadata expiration check: 3:27:18 ago on Wed 19 Apr 2023 03:09:16 PM CEST.
-        # curl.x86_64   7.61.1-25.el8_7.3   BaseOS
-        # [...]
-        # Obsoleting Packages
-        # grub2-tools.x86_64        1:2.02-142.el8_7.3.rocky.0.2    BaseOS
-        #     grub2-tools.x86_64    1:2.02-142.el8_7.1.rocky.0.2    @BaseOS
-        # [...]
-        #
-        security=$(grep -v '^Last metadata expiration check:' "${STDOUT}" | grep -v '^Updating Subscription Management repositories' | grep -v '^Obsoleting Packages' | \
-            grep -v '^ ' | grep -v '^$' | cut -d ' ' -f 1 | sort -u | wc -l)
 
         sec_n=$(sed --regexp-extended --quiet --expression='s/^\s+([0-9]+) Security notice\(s\)/\1/p' "${STDOUT}")
         test -n "${sec_n}" && sec_n=0
