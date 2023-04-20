@@ -1,6 +1,6 @@
 #!/bin/bash
 
-readonly __VERSION="1.0.0-20230419"
+readonly __VERSION="1.0.0-20230420"
 readonly __NAME="check_yum"
 
 readonly DNF="/usr/bin/dnf"
@@ -107,6 +107,7 @@ function check_for_updates() {
     summary="no"
     security=0
     non_security=0
+    reboot_required=0
 
     # Check for summary line
     #
@@ -114,6 +115,11 @@ function check_for_updates() {
     #  - DNF on RHEL9 prints the summary to stderr
     #  - DNF on RHEL8 prints no summary at all but prints all packages to stdout
     #  - YUM on RHEL7 prints the summary to stdout
+    #
+    # For installed kernel updates, not booted yet the output contains:
+    #
+    # Security: kernel-core-4.18.0-425.19.2.el8_7.x86_64 is an installed security update
+    #
     if grep -Eq '^No security updates needed, but ([0-9]+) updates available' "${STDOUT}" "${STDERR}"; then
         non_security=$(sed --regexp-extended --quiet --expression='s/No security updates needed, but ([0-9]+) updates available/\1/p' "${STDOUT}" "${STDERR}")
         summary="yes"
@@ -125,6 +131,8 @@ function check_for_updates() {
         security=$(echo "${s_and_ns}" | cut -d ',' -f 1)
         non_security=$(echo "${s_and_ns}" | cut -d ',' -f 2)
         summary="yes"
+    elif grep -Eq '^Security: kernel-.* is an installed security update' "${STDOUT}" "${STDERR}"; then
+        reboot_required=1
     fi
 
     if [ "${summary}" != "yes" ]; then
@@ -170,7 +178,7 @@ function check_for_updates() {
     fi
 
     clean_on_exit
-    echo "${security},${non_security}"
+    echo "${security},${non_security},${reboot_required}"
 }
 
 function parse_command_line_options() {
@@ -243,6 +251,12 @@ function main() {
 
     security_count="$(echo "${update_count}" | cut -d ',' -f 1)"
     non_security_count="$(echo "${update_count}" | cut -d ',' -f 2)"
+    needs_reboot="$(echo "${update_count}" | cut -d ',' -f 3)"
+
+    if [ "${needs_reboot}" -gt 0 ]; then
+        echo "Installed kernel security updates needs reboot"
+        exit ${CRITICAL}
+    fi
 
     echo "${security_count} security updates available, ${non_security_count} non-security updates available"
     if [ "${security_count}" -gt 0 ]; then
