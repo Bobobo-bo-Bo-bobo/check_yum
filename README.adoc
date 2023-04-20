@@ -1,0 +1,40 @@
+= check_yum - Nagios check to check for pending updates on RPM based distributions
+:source-highlighter: rouge
+:rouge-style: gruvbox
+:stylesheet: asciidoc.css
+:toc: left
+
+== Preface
+This https://nagios.com[Nagios] / https://icinga.com[Icinga] check looks for pending package updates on RPM based distributions.
+
+A distingtion between security updates and non-security updates will be made.
+
+== Requirements
+Besides `yum` or `dnf` (obviously), `sed` (GNU sed), grep (GNU grep) and `bash` are required to run this check.
+
+== Command line parameters
+
+[width="100%",cols="<34%,<66%",options="header",]
+|===
+|_Option_ |_Note_
+|`-C` / `--cacheonly` |Used cached information, don't update DNF/YUM cache
+|`-D <repo>,...` / `--disable-repo=<repo>,...` |Comma separated list of repos to disable
+|`-E <repo>,...` / `--enable-repo=<repo>,...` |Comma separated list of repos to enable
+|`-V` / `--version` |Show version information
+|`-W` / `--warn-on-lock` |Warn if database is locked (another dnf/yum process is running). Default: no, return OK status
+|`-c <cfg>` / `--config-file=<cfg>` |Use non-default configuration file for DNF/YUM. Default: `/etc/dnf/dnf.conf` (DNF) or `/etc/yum.conf` (YUM)
+|`-h` / `--help` |Show help text
+|`-w` / `--warn-on-non-security-updates` |Report warning state if (only) non-security updates are found. Default: Report OK state
+|===
+
+
+== License
+
+....
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2021 Free Software Foundation, Inc. <http://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+....

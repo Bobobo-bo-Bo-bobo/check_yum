@@ -1,6 +1,6 @@
 #!/bin/bash
 
-readonly __VERSION="1.0.0-20230420"
+readonly __VERSION="1.0.0"
 readonly __NAME="check_yum"
 
 readonly DNF="/usr/bin/dnf"
