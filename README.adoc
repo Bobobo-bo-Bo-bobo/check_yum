@@ -9,6 +9,11 @@ This https://nagios.com[Nagios] / https://icinga.com[Icinga] check looks for pen
 
 A distingtion between security updates and non-security updates will be made.
 
+== Repositories
+
+* Primary development repository: https://git.ypbind.de/cgit/check_yum/
+* Backup repository: https://github.com/Bobobo-bo-Bo-bobo/check_yum
+
 == Requirements
 Besides `yum` or `dnf` (obviously), `sed` (GNU sed), grep (GNU grep) and `bash` are required to run this check.
 
